@@ -75,8 +75,14 @@ def main(out: Path) -> int:
         print(base64.b64encode(p.read_bytes()).decode('ascii'))
         print('===END===')
     w.close()
-    return 0
+    for widget in QApplication.topLevelWidgets():   # Python-owned widgets outliving Qt segfault at exit
+        widget.close()
+        widget.deleteLater()
+    qt.processEvents()
+    return len(shots)
 
 
 if __name__ == '__main__':
-    sys.exit(main(Path(sys.argv[1] if len(sys.argv) > 1 else 'shots')))
+    count = main(Path(sys.argv[1] if len(sys.argv) > 1 else 'shots'))
+    sys.stdout.flush()
+    os._exit(0 if count == 5 else 1)               # skip interpreter teardown of Qt objects

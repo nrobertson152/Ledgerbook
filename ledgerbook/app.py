@@ -626,6 +626,8 @@ class Main(QMainWindow):
         return self.store.values(row) if row is not None else None
 
     def attachment_values(self, row_index):
+        if not self.current:
+            return []
         values = self._row_values(row_index) or {}
         return [str(values[f['key']]).strip() for f in self.store.columns(self.current)
                 if f['type'] == 'attachment' and str(values.get(f['key'], '') or '').strip()]
