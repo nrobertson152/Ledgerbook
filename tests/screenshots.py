@@ -38,12 +38,14 @@ def main(out: Path) -> int:
                            'next_due': (today + timedelta(days=due)).isoformat() if due is not None else ''})
     lab = s.add_book('Calibration', fields=templates.fields('Equipment & calibration'))
     s.configure_book(lab, icon='🔧')
-    s.save_entry(lab, {'title': 'Torque wrench TW-3', 'serial': 'TW3-0042', 'result': 'Pass',
-                       'next_due': (today + timedelta(days=10)).isoformat()})
+    s.save_entry(lab, {'entry_date': (today - timedelta(days=355)).isoformat(), 'title': 'Torque wrench TW-3',
+                       'serial': 'TW3-0042', 'result': 'Pass', 'next_due': (today + timedelta(days=10)).isoformat()})
     exp = s.add_book('Shop expenses', fields=templates.fields('Expenses'))
-    for item, cat, amount in (('Bandsaw blades', 'Tools', '$184.20'), ('Welding wire', 'Materials', '$96.00'),
-                              ('Forklift service', 'Services', '$1,250.00')):
-        s.save_entry(exp, {'title': item, 'category': cat, 'cost': amount, 'paid': 'true'})
+    for days_ago, item, cat, amount in ((40, 'Bandsaw blades', 'Tools', '$184.20'),
+                                        (12, 'Welding wire', 'Materials', '$96.00'),
+                                        (3, 'Forklift service', 'Services', '$1,250.00')):
+        s.save_entry(exp, {'entry_date': (today - timedelta(days=days_ago)).isoformat(), 'title': item,
+                           'category': cat, 'cost': amount, 'paid': 'true'})
     w.reload_tree(fresh=True)
     out.mkdir(parents=True, exist_ok=True)
     shots = []

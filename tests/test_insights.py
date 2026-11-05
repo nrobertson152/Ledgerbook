@@ -98,6 +98,12 @@ class Templates(unittest.TestCase):
             self.assertEqual(templates.fields('Blank'), DEFAULT_FIELDS)
             s.close()
 
+    def test_every_column_type_has_a_display_name(self):
+        from ledgerbook.constants import TYPE_NAMES
+        from ledgerbook.store import TYPES
+        self.assertEqual(set(TYPE_NAMES), TYPES)
+        self.assertEqual(TYPE_NAMES['due'], 'Due date')
+
     def test_fields_are_copies(self):
         a = templates.fields('Expenses')
         a[2]['options'].append('Changed')
