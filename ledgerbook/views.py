@@ -4,6 +4,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QScrollArea, QSizePolicy,
                                QStackedWidget, QTableWidget, QTableWidgetItem, QWidget, QGridLayout)
 
+from . import revisionworx as rwxlink
 from . import theme
 from .constants import DEFAULT_ICON
 from .util import fmt_date, greeting, is_true, plural, relative_day
@@ -324,8 +325,9 @@ class LogbookView(QWidget):
         self.sort_chip.setVisible(bool(text))
         self.sort_chip.setText(text)
 
-    def populate(self, fields, rows, sort_key, sort_reverse, saved_widths):
-        """rows: list of (entry_id, values dict) in display order."""
+    def populate(self, fields, rows, sort_key, sort_reverse, saved_widths, rwx_index=None):
+        """rows: list of (entry_id, values dict) in display order. ``rwx_index``: RevisionWorx documents by number
+        (revisionworx.index) for live status in RevisionWorx document columns, or None."""
         t = T()
         table = self.table
         table.setUpdatesEnabled(False)
@@ -355,6 +357,15 @@ class LogbookView(QWidget):
                     cell.setForeground(accent if is_true(full) else faint)
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     cell.setData(Qt.ItemDataRole.UserRole, full)
+                    table.setItem(i, j, cell)
+                    continue
+                if f['type'] == 'revision':
+                    text, tone = rwxlink.cell(full, rwx_index)
+                    cell = QTableWidgetItem(text)
+                    cell.setData(Qt.ItemDataRole.UserRole, full)
+                    if tone:
+                        cell.setForeground(QColor(t[tone]))
+                    cell.setToolTip(text)
                     table.setItem(i, j, cell)
                     continue
                 display = full.replace('\n', ' ⏎ ')

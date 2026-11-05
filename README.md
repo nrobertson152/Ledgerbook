@@ -46,6 +46,7 @@ Ledgerbook 1.0.0 is the first stable release. It keeps every feature from the be
 - **PDF reports** with your choice of columns and date range, shaded headers, banded rows, page numbers and an optional landscape layout.
 - **Import and export** as CSV or `.ledgerbook` files.
 - **Backups**: manual and automatic backups, restore, and database integrity checks.
+- **RevisionWorx document columns**: a column type that holds a document number such as `DWG-100`. When [RevisionWorx](https://github.com/nrobertson152/RevisionWorx) is installed, the table shows each document's live revision and state, the entry editor can pick documents, and the entry menu opens the document in RevisionWorx (F5 refreshes). Without RevisionWorx the number is plain text.
 - **Four themes**: Midnight, Graphite, Terracotta and Light, checked for readable contrast and using the bundled Inter typeface.
 
 ## Getting started

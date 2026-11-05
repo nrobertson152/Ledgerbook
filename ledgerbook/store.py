@@ -23,7 +23,7 @@ LEGACY_FIELDS = [
     {'key':'notes','label':'Notes','type':'text','visible':True},
 ]
 LEGACY_KEYS = {'entry_date','title','category','reading','cost','notes'}
-TYPES = {'text','number','date','checkbox','select','multiline','attachment'}
+TYPES = {'text','number','date','checkbox','select','multiline','attachment','revision'}
 
 class Store:
     def __init__(self, path=None):

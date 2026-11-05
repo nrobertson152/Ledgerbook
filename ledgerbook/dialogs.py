@@ -245,17 +245,47 @@ class EntryDialog(Panel):
                 w.setCalendarPopup(True)
                 w.setDisplayFormat('yyyy-MM-dd')
                 w.setDate(QDate.fromString(v, 'yyyy-MM-dd') if v else QDate.currentDate())
+            elif typ == 'revision':
+                w = QLineEdit(v)
+                w.setPlaceholderText('Document number, for example DWG-100')
             else:
                 w = QLineEdit(v)
                 w.setPlaceholderText({'number': 'Number', 'attachment': 'File name or path'}.get(typ, 'Optional'))
             self.widgets[key] = w
-            self.body.addWidget(field_block(f['label'], w))
+            if typ == 'revision' and getattr(parent, 'rwx', None):
+                row = QWidget()
+                rl = hbox(row, (0, 0, 0, 0), 8)
+                rl.addWidget(w, 1)
+                rl.addWidget(size_button(button('Choose…', '', None, lambda e=w: self.choose_document(e))))
+                self.body.addWidget(field_block(f['label'], row))
+            else:
+                self.body.addWidget(field_block(f['label'], w))
         self.body.addStretch(1)
         self.add_buttons('Save entry', self.save)
         QShortcut(QKeySequence('Ctrl+Return'), self, activated=self.save)
         first = next(iter(self.widgets.values()), None)
         if first is not None:
             QTimer.singleShot(0, first.setFocus)
+
+    def choose_document(self, edit):
+        """Pick a RevisionWorx document for a RevisionWorx document field."""
+        from . import revisionworx as rwxlink
+        try:
+            docs = self.parent().rwx_documents(fresh=True)
+        except rwxlink.RwxError as e:
+            self.set_error(e)
+            return None
+        if not docs:
+            self.set_error('There are no documents in RevisionWorx yet.')
+            return None
+        current = next((i for i, d in enumerate(docs) if str(d.get('number', '')).casefold()
+                        == edit.text().strip().casefold()), 0)
+        picked = pick_item(self, 'RevisionWorx document', 'Choose the document this entry refers to.',
+                           rwxlink.choices(docs), current, 'Use document')
+        if picked is None:
+            return None
+        edit.setText(docs[picked].get('number', ''))
+        return docs[picked]
 
     def collect(self):
         values = {}
