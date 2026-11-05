@@ -29,4 +29,4 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "PySide6-Essentials>=6.7,<7" "revisionworx @ git+https://github.com/nrobertson152/RevisionWorx@main"
       - name: Tests (offscreen Qt, real RevisionWorx required)
-        run: LEDGERBOOK_REQUIRE_RWX=1 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -t . -v
+        run: LEDGERBOOK_REQUIRE_RWX=1 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
