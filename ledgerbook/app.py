@@ -12,7 +12,7 @@ from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QMainWindow, QMenu, QPushButton, QStackedWidget,
                                QWidget)
 
-from . import VERSION, icons, theme
+from . import VERSION, icons, insights, templates, theme
 from . import revisionworx as rwxlink
 from .constants import DEFAULT_ICON
 from .dialogs import (ArchiveDialog, ColumnsDialog, EntryDialog, FullTextDialog, LogbookDialog, PdfDialog,
@@ -422,7 +422,11 @@ class Main(QMainWindow):
         order = [i for i in self._recent_order if i in books]
         rest = sorted((i for i in books if i not in order), key=lambda i: -int(i))
         recent = [(books[i], last.get(books[i]['id'])) for i in (order + rest)[:6]]
-        self.welcome.refresh(overview, recent)
+        try:
+            upcoming = insights.upcoming(self.store)
+        except Exception:  # noqa: BLE001 - a summary must never stop Home from showing
+            upcoming = []
+        self.welcome.refresh(overview, recent, upcoming)
         self.sidebar.set_counts(overview['archived'], overview['recycled'])
 
     def go_home(self):
@@ -513,11 +517,12 @@ class Main(QMainWindow):
         self.row_ids = [r['id'] for r in rows]
         widths = self.prefs.get('column_widths', {}).get(str(self.current), {})
         self._rendering = True
+        shown = [(r['id'], self.store.values(r)) for r in rows]
         try:
-            self.view.populate(fields, [(r['id'], self.store.values(r)) for r in rows], self.sort_key,
-                               self.sort_reverse, widths, self._rwx_index_for(fields))
+            self.view.populate(fields, shown, self.sort_key, self.sort_reverse, widths, self._rwx_index_for(fields))
         finally:
             self._rendering = False
+        self.view.set_totals(insights.totals_text(fields, [v for _i, v in shown]))
         total = self.store.db.execute('SELECT COUNT(*) FROM entries WHERE book_id=?', (self.current,)).fetchone()[0]
         if rows:
             self.view.show_state(self.view.TABLE)
@@ -599,11 +604,52 @@ class Main(QMainWindow):
         edit = menu.addAction('Edit entry', self.edit_entry)
         edit.setEnabled(n == 1)
         menu.addAction('Duplicate' if n == 1 else 'Duplicate %d entries' % n, self.duplicate_entry)
-        for number in (self.revision_values(self.selected_rows()[0]) if n == 1 and self.rwx else []):
-            menu.addAction('Show %s in RevisionWorx' % number, lambda num=number: self.show_in_rwx(num))
+        for text, action in (self.entry_extra_actions(self.selected_rows()[0]) if n == 1 else []):
+            menu.addAction(text, action)
         menu.addSeparator()
         menu.addAction('Delete' if n == 1 else 'Delete %d entries' % n, self.delete_entries)
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def entry_extra_actions(self, row_index):
+        """Menu actions that depend on one entry's values: open its attachments, show its RevisionWorx documents."""
+        out = []
+        for path in self.attachment_values(row_index):
+            out.append(('Open %s' % (Path(path).name or path), lambda p=path: self.open_attachment(p)))
+        for number in (self.revision_values(row_index) if self.rwx else []):
+            out.append(('Show %s in RevisionWorx' % number, lambda num=number: self.show_in_rwx(num)))
+        return out
+
+    def _row_values(self, row_index):
+        if not self.current or row_index >= len(self.row_ids):
+            return None
+        row = self.store.db.execute('SELECT * FROM entries WHERE id=?', (self.row_ids[row_index],)).fetchone()
+        return self.store.values(row) if row is not None else None
+
+    def attachment_values(self, row_index):
+        values = self._row_values(row_index) or {}
+        return [str(values[f['key']]).strip() for f in self.store.columns(self.current)
+                if f['type'] == 'attachment' and str(values.get(f['key'], '') or '').strip()]
+
+    def open_attachment(self, path):
+        if not Path(path).exists():
+            self.say('File not found: %s' % path, 'bad')
+            return False
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).resolve())))
+        return True
+
+    def open_entry(self, book_id, entry_id):
+        """Open a logbook with one entry selected (from Home's Coming up list)."""
+        self.select_book(book_id)
+        if self.view.search.text():
+            self.view.search.clear()
+            self.load_rows()
+        if entry_id in self.row_ids:
+            row = self.row_ids.index(entry_id)
+            self.table.clearSelection()
+            self.table.selectRow(row)
+            self.table.scrollToItem(self.table.item(row, 0))
+            return True
+        return False
 
     # ===================================================================================== RevisionWorx (optional)
     def in_background(self, fn, done):
@@ -762,7 +808,9 @@ class Main(QMainWindow):
             return
         d = dlg.result_data
         try:
-            bid = self.store.add_book(d['name'], d['description'])
+            tpl = d.get('template')
+            fields = templates.fields(tpl) if tpl and tpl != 'Blank' else None
+            bid = self.store.add_book(d['name'], d['description'], fields=fields)
             self.store.configure_book(bid, icon=d['icon'], accent=d['accent'])
             if d['folder_id'] is not None:
                 self.store.configure_book(bid, folder_id=d['folder_id'])
@@ -944,17 +992,21 @@ class Main(QMainWindow):
         if not path:
             return
         try:
-            n = self.store.import_csv(self.current, path)
+            rep = self.store.import_csv_report(self.current, path)
         except Exception as e:  # noqa: BLE001
-            error(self, e)
+            error(self, e, 'Nothing was imported')
             return
+        n = rep['imported']
         if n == 0:
             labels = ', '.join(f['label'] for f in self.store.columns(self.current))
+            found = (' Headings found: %s.' % ', '.join(rep['ignored'])) if rep['ignored'] else ''
             notify(self, 'Nothing imported', 'No rows were imported. The first row of the CSV must contain column '
-                   'headings that match this logbook: %s.' % labels)
+                   'headings that match this logbook (case and spacing do not matter): %s.%s' % (labels, found))
             return
         self.after_data_change()
-        self.say('Imported %s' % plural(n, 'entry', 'entries'))
+        extra = ('; ignored column%s: %s' % ('' if len(rep['ignored']) == 1 else 's', ', '.join(rep['ignored']))
+                 if rep['ignored'] else '')
+        self.say('Imported %s%s' % (plural(n, 'entry', 'entries'), extra), 'warn' if extra else 'good')
 
     def export_csv(self):
         if not self._need_book():
@@ -1018,7 +1070,8 @@ class Main(QMainWindow):
                     rows.append(self.store.values(row))
             book = self.book_row()
             subtitle = '%s  ·  generated %s' % (plural(len(rows), 'entry', 'entries'), fmt_date(date.today().isoformat()))
-            pages = pdf_report(path, book['name'], opts['fields'], rows, subtitle, opts['landscape'])
+            pages = pdf_report(path, book['name'], opts['fields'], rows, subtitle, opts['landscape'],
+                               summary=insights.totals_text(opts['fields'], rows))
         except Exception as e:  # noqa: BLE001
             error(self, e, 'Could not create the report')
             return

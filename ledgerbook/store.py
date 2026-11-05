@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from .insights import normalize_number
+
 DEFAULT_DB = Path(os.environ.get('XDG_DATA_HOME', str(Path.home()/'.local/share'))) / 'ledgerbook' / 'ledgerbook.sqlite3'
 DEFAULT_FIELDS = [
     {'key':'entry_date','label':'Date','type':'date','visible':True},
@@ -23,7 +25,16 @@ LEGACY_FIELDS = [
     {'key':'notes','label':'Notes','type':'text','visible':True},
 ]
 LEGACY_KEYS = {'entry_date','title','category','reading','cost','notes'}
-TYPES = {'text','number','date','checkbox','select','multiline','attachment','revision'}
+TYPES = {'text','number','date','checkbox','select','multiline','attachment','revision','due'}
+
+def _legacy_number(value,default):
+    """The value for the old fixed `reading` / `cost` columns. Columns can be retyped since v3, so a text value
+    there is kept in the entry's own data and the fixed column gets the default, never an error."""
+    try:
+        n=normalize_number(value) if str(value or '').strip() else ''
+        return float(n) if n else default
+    except ValueError:
+        return default
 
 class Store:
     def __init__(self, path=None):
@@ -78,7 +89,8 @@ class Store:
         if row is None:raise ValueError('Logbook not found')
         return json.loads(row['columns_json']) if row['columns_json'] else [dict(f) for f in DEFAULT_FIELDS]
 
-    def set_columns(self,book_id,fields):
+    @staticmethod
+    def _check_fields(fields):
         if not fields or not any(f.get('visible',True) for f in fields):raise ValueError('Keep at least one visible column')
         keys=[f['key'] for f in fields]
         if len(set(keys))!=len(keys):raise ValueError('Duplicate field keys')
@@ -86,13 +98,21 @@ class Store:
             if not f['label'].strip():raise ValueError('Column labels cannot be blank')
             if f['type'] not in TYPES:raise ValueError('Invalid column type')
             if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*',f['key']):raise ValueError('Invalid column identifier')
+
+    def set_columns(self,book_id,fields):
+        self._check_fields(fields)
         if not self.db.execute('SELECT 1 FROM books WHERE id=?',(book_id,)).fetchone():raise ValueError('Logbook not found')
         self.db.execute('UPDATE books SET columns_json=? WHERE id=?',(json.dumps(fields),book_id));self.db.commit()
 
-    def add_book(self,name,description=''):
+    def add_book(self,name,description='',fields=None):
+        """A new logbook with the default columns, or with ``fields`` (a template's column list)."""
         if not name.strip():raise ValueError('Enter a logbook name')
-        cur=self.db.execute('INSERT INTO books(name,description,columns_json) VALUES(?,?,?)',(name.strip(),description.strip(),json.dumps(DEFAULT_FIELDS)))
-        self.db.commit();return cur.lastrowid
+        with self.db:
+            cur=self.db.execute('INSERT INTO books(name,description,columns_json) VALUES(?,?,?)',(name.strip(),description.strip(),json.dumps(DEFAULT_FIELDS)))
+            if fields is not None:
+                self._check_fields(fields)
+                self.db.execute('UPDATE books SET columns_json=? WHERE id=?',(json.dumps(fields),cur.lastrowid))
+        return cur.lastrowid
 
     def update_book(self,book_id,name,description=''):
         if not name.strip():raise ValueError('Enter a logbook name')
@@ -147,16 +167,40 @@ class Store:
 
     def deleted_items(self):return self.db.execute('SELECT * FROM deleted_entries ORDER BY deleted_at DESC').fetchall()
     def import_csv(self,book_id,path):
+        return self.import_csv_report(book_id,path)['imported']
+
+    def import_csv_report(self,book_id,path):
+        """Import rows from a CSV whose first row names the columns (by label or key; case, spacing and a
+        trailing colon do not matter). All or nothing: a bad value stops the import with the row number and
+        nothing is added. Returns {'imported', 'matched', 'ignored', 'missing'} (column names)."""
+        def norm(text):return re.sub(r'\s+',' ',str(text or '')).strip().rstrip(':').strip().casefold()
+        fields=self.columns(book_id)
+        lookup={}
+        for f in fields:
+            lookup.setdefault(norm(f['label']),f['key']);lookup.setdefault(norm(f['key']),f['key'])
         with open(path,encoding='utf-8-sig',newline='') as fp:
-            reader=csv.DictReader(fp)
-            if not reader.fieldnames:raise ValueError('CSV has no headers')
-            fields=self.columns(book_id);by_label={f['label']:f['key'] for f in fields}
+            reader=csv.reader(fp)
+            header=next(reader,None)
+            if not header or not any(str(h).strip() for h in header):raise ValueError('The CSV file has no heading row')
+            columns=[lookup.get(norm(h)) for h in header]
+            matched=[h for h,k in zip(header,columns) if k];ignored=[h for h,k in zip(header,columns) if not k and str(h).strip()]
+            used=set(k for k in columns if k)
+            missing=[f['label'] for f in fields if f['key'] not in used]
             count=0
-            with self.db:
-                for row in reader:
-                    vals={by_label[k]:v for k,v in row.items() if k in by_label}
-                    if vals and any(str(v).strip() for v in vals.values()):self.save_entry(book_id,vals);count+=1
-            return count
+            if used:
+                try:
+                    with self.db:
+                        for n,row in enumerate(reader,start=2):
+                            vals={}
+                            for k,v in zip(columns,row):
+                                if k and not str(vals.get(k,'')).strip():vals[k]=v
+                            if not any(str(v).strip() for v in vals.values()):continue
+                            try:self.save_entry(book_id,vals,commit=False)
+                            except ValueError as e:raise ValueError('Row %d: %s. Nothing was imported.'%(n,e)) from None
+                            count+=1
+                except Exception:
+                    self.db.rollback();raise
+        return {'imported':count,'matched':matched,'ignored':ignored,'missing':missing}
     def integrity_check(self):return self.db.execute('PRAGMA integrity_check').fetchone()[0]
 
 
@@ -172,20 +216,24 @@ class Store:
             if k not in data and k in row.keys():data[k]=row[k]
         return data
 
-    def save_entry(self,book_id,values,entry_id=None):
+    def save_entry(self,book_id,values,entry_id=None,commit=True):
         fields=self.columns(book_id)
         cleaned={}
         for f in fields:
             k=f['key'];v=values.get(k,'')
-            if f['type']=='date' and str(v).strip():datetime.strptime(str(v),'%Y-%m-%d')
-            if f['type']=='number' and str(v).strip():float(v)
+            if f['type'] in ('date','due') and str(v if v is not None else '').strip():
+                try:datetime.strptime(str(v).strip(),'%Y-%m-%d')
+                except ValueError:raise ValueError('“%s” must be a date like 2026-11-05 (got “%s”)'%(f['label'],v)) from None
+            if f['type']=='number' and str(v if v is not None else '').strip():
+                try:v=normalize_number(v)
+                except ValueError:raise ValueError('“%s” must be a number (got “%s”)'%(f['label'],v)) from None
             cleaned[k]=str(v).strip() if v is not None else ''
         if not any(str(v).strip() for v in cleaned.values()):raise ValueError('Enter at least one value')
         dt=cleaned.get('entry_date') or datetime.now().strftime('%Y-%m-%d')
         title=cleaned.get('title') or next((v for v in cleaned.values() if v),'Entry')
         legacy={'category':cleaned.get('category',''),'notes':cleaned.get('notes',''),'reading':None,'cost':0.0}
-        if cleaned.get('reading'):legacy['reading']=float(cleaned['reading'])
-        if cleaned.get('cost'):legacy['cost']=float(cleaned['cost'])
+        legacy['reading']=_legacy_number(cleaned.get('reading'),None)
+        legacy['cost']=_legacy_number(cleaned.get('cost'),0.0)
         params=(dt,title,legacy['category'],legacy['reading'],legacy['cost'],legacy['notes'],json.dumps(cleaned))
         if entry_id is None:
             cur=self.db.execute('INSERT INTO entries(book_id,entry_date,title,category,reading,cost,notes,extras_json) VALUES(?,?,?,?,?,?,?,?)',(book_id,*params))
@@ -193,7 +241,8 @@ class Store:
         else:
             self.db.execute('UPDATE entries SET entry_date=?,title=?,category=?,reading=?,cost=?,notes=?,extras_json=? WHERE id=? AND book_id=?',(*params,entry_id,book_id))
             result=entry_id
-        self.db.commit();return result
+        if commit:self.db.commit()
+        return result
 
     def delete_entry(self,entry_id):
         row=self.db.execute('SELECT * FROM entries WHERE id=?',(entry_id,)).fetchone()
@@ -248,21 +297,24 @@ class Store:
             for f in fields:
                 v=entry.get(f['key'],'')
                 if v is not None and not isinstance(v,(str,int,float,bool)):raise ValueError('Invalid field value')
-                if f['type']=='date' and str(v or '').strip():datetime.strptime(str(v),'%Y-%m-%d')
-                if f['type']=='number' and str(v or '').strip():float(v)
+                if f['type'] in ('date','due') and str(v or '').strip():datetime.strptime(str(v),'%Y-%m-%d')
+                if f['type']=='number' and str(v or '').strip():normalize_number(v)
         # Import is transactional: invalid files never leave partially created books.
         try:
             with self.db:
                 cur=self.db.execute('INSERT INTO books(name,description,columns_json) VALUES(?,?,?)',
                                     (name.strip(),description,json.dumps(fields)))
                 book_id=cur.lastrowid
+                numbers={f['key'] for f in fields if f['type']=='number'}
                 for entry in entries:
                     cleaned={k:str(entry.get(k,'') if entry.get(k,'') is not None else '') for k in keys}
+                    for k in numbers:
+                        if cleaned[k].strip():cleaned[k]=normalize_number(cleaned[k])
                     dt=cleaned.get('entry_date') or datetime.now().strftime('%Y-%m-%d')
                     title=cleaned.get('title') or next((v for v in cleaned.values() if v),'Entry')
                     self.db.execute('INSERT INTO entries(book_id,entry_date,title,category,reading,cost,notes,extras_json) VALUES(?,?,?,?,?,?,?,?)',
-                                    (book_id,dt,title,cleaned.get('category',''),float(cleaned['reading']) if cleaned.get('reading') else None,
-                                     float(cleaned['cost']) if cleaned.get('cost') else 0,cleaned.get('notes',''),json.dumps(cleaned)))
+                                    (book_id,dt,title,cleaned.get('category',''),_legacy_number(cleaned.get('reading'),None),
+                                     _legacy_number(cleaned.get('cost'),0.0),cleaned.get('notes',''),json.dumps(cleaned)))
         except Exception:raise
         return book_id,len(entries)
 

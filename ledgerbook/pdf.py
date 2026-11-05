@@ -16,7 +16,7 @@ def column_weight(field):
     typ, key, name = field.get('type'), field.get('key', ''), str(field.get('label', '')).lower()
     if typ == 'multiline' or key == 'notes' or 'note' in name or 'description' in name:
         return 2.2
-    return {'date': 0.9, 'number': 0.8, 'checkbox': 0.6, 'select': 1.0}.get(typ, 1.4 if key == 'title' else 1.2)
+    return {'date': 0.9, 'due': 1.0, 'number': 0.8, 'checkbox': 0.6, 'select': 1.0}.get(typ, 1.4 if key == 'title' else 1.2)
 
 
 def wrap_text(text, metrics, max_width):
@@ -54,8 +54,9 @@ def _font(size, bold=False):
     return f
 
 
-def pdf_report(path, title, fields, rows, subtitle='', landscape=False):
-    """Write a PDF to ``path``. ``rows`` are value dictionaries in display order. Returns the page count."""
+def pdf_report(path, title, fields, rows, subtitle='', landscape=False, summary=''):
+    """Write a PDF to ``path``. ``rows`` are value dictionaries in display order. ``summary`` (for example the
+    number-column totals) is printed under the table. Returns the page count."""
     if not fields:
         raise ValueError('Select at least one column')
     writer = QPdfWriter(str(path))
@@ -164,6 +165,14 @@ def pdf_report(path, title, fields, rows, subtitle='', landscape=False):
             painter.setFont(body)
             painter.setPen(QColor(MUTED))
             painter.drawText(int(margin + pad), int(state['y'] + 30), 'No entries in the selected range.')
+        elif summary:
+            head_lines = wrap_text(summary, head_m, usable - 2 * pad)
+            if state['y'] + 18 + len(head_lines) * line > bottom:
+                new_page()
+            painter.setFont(head)
+            painter.setPen(QColor(INK))
+            for k, text in enumerate(head_lines):
+                painter.drawText(int(margin + pad), int(state['y'] + 18 + k * line + head_m.ascent()), text)
     finally:
         painter.end()
     return state['page']
