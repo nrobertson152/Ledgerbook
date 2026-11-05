@@ -4,12 +4,14 @@ import os
 
 from PySide6.QtCore import QDate, Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDateEdit, QDialog, QFrame,
+from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDateEdit, QDialog, QFileDialog,
+                               QFrame,
                                QGridLayout, QHeaderView, QLineEdit, QListWidget, QListWidgetItem, QScrollArea,
                                QTableWidget, QTableWidgetItem, QTextEdit, QToolButton, QWidget)
 
 from . import icons, theme
 from .constants import DEFAULT_ICON, LOGBOOK_ICONS, TYPE_NAMES
+from .insights import shows_total
 from .store import TYPES
 from .util import fmt_timestamp, is_true, plural
 from .widgets import (IconTile, button, divider, hbox, icon_label, label, set_button_icon, vbox)
@@ -248,6 +250,14 @@ class EntryDialog(Panel):
             elif typ == 'revision':
                 w = QLineEdit(v)
                 w.setPlaceholderText('Document number, for example DWG-100')
+            elif typ == 'due':
+                w = QLineEdit(v)
+                w.setPlaceholderText('YYYY-MM-DD, or leave empty')
+                w.setAccessibleName(f['label'])
+            elif typ == 'attachment':
+                w = QLineEdit(v)
+                w.setPlaceholderText('File name or path')
+                w.setAccessibleName(f['label'])
             else:
                 w = QLineEdit(v)
                 w.setPlaceholderText({'number': 'Number', 'attachment': 'File name or path'}.get(typ, 'Optional'))
@@ -258,6 +268,26 @@ class EntryDialog(Panel):
                 rl.addWidget(w, 1)
                 rl.addWidget(size_button(button('Choose…', '', None, lambda e=w: self.choose_document(e))))
                 self.body.addWidget(field_block(f['label'], row))
+            elif typ == 'due':
+                row = QWidget()
+                rl = hbox(row, (0, 0, 0, 0), 6)
+                w.setMinimumWidth(150)
+                rl.addWidget(w, 1)
+                for text, months in (('+1 mo', 1), ('+3 mo', 3), ('+6 mo', 6), ('+1 yr', 12)):
+                    b = button(text, 'ghost', None, lambda e=w, m=months: self.set_due(e, m))
+                    b.setMinimumHeight(40)
+                    b.setFixedWidth(b.fontMetrics().horizontalAdvance(text) + 30)
+                    b.setToolTip('Due %s after the entry date (or today)' % ('1 year' if months == 12 else
+                                                                            '%d month%s' % (months, 's' * (months > 1))))
+                    rl.addWidget(b)
+                self.body.addWidget(field_block(f['label'], row, 'Shown on Home when it is overdue or due within '
+                                                                 '30 days.'))
+            elif typ == 'attachment':
+                row = QWidget()
+                rl = hbox(row, (0, 0, 0, 0), 8)
+                rl.addWidget(w, 1)
+                rl.addWidget(size_button(button('Browse…', '', None, lambda e=w: self.browse_file(e))))
+                self.body.addWidget(field_block(f['label'], row))
             else:
                 self.body.addWidget(field_block(f['label'], w))
         self.body.addStretch(1)
@@ -266,6 +296,27 @@ class EntryDialog(Panel):
         first = next(iter(self.widgets.values()), None)
         if first is not None:
             QTimer.singleShot(0, first.setFocus)
+
+    def entry_day(self):
+        """The entry's own date (its first date column), else today."""
+        from datetime import date
+        for f in self.fields:
+            w = self.widgets.get(f['key'])
+            if f['type'] == 'date' and isinstance(w, QDateEdit):
+                return w.date().toPython()
+        return date.today()
+
+    def set_due(self, edit, months):
+        from .insights import add_months
+        edit.setText(add_months(self.entry_day(), months).isoformat())
+
+    def browse_file(self, edit):
+        import os
+        start = os.path.dirname(edit.text().strip()) or os.path.expanduser('~')
+        path, _ = QFileDialog.getOpenFileName(self, 'Choose a file', start)
+        if path:
+            edit.setText(path)
+        return path
 
     def choose_document(self, edit):
         """Pick a RevisionWorx document for a RevisionWorx document field."""
@@ -374,6 +425,11 @@ class ColumnsDialog(Panel):
         self.visible_box = QCheckBox('Show this column in the logbook table')
         self.visible_box.toggled.connect(self._visible_changed)
         right.addWidget(self.visible_box)
+        self.total_box = QCheckBox('Show a total under the table')
+        self.total_box.setToolTip('Sum and average of the entries shown. Turn off for readings such as an odometer, '
+                                  'where a sum means nothing.')
+        self.total_box.toggled.connect(self._total_changed)
+        right.addWidget(self.total_box)
         self.key_label = label('', 'faint')
         right.addWidget(self.key_label)
         right.addStretch(1)
@@ -411,8 +467,8 @@ class ColumnsDialog(Panel):
             return
         f = self.current()
         enabled = f is not None
-        for w in (self.name_edit, self.type_combo, self.options_edit, self.visible_box, self.up_btn, self.down_btn,
-                  self.remove_btn):
+        for w in (self.name_edit, self.type_combo, self.options_edit, self.visible_box, self.total_box, self.up_btn,
+                  self.down_btn, self.remove_btn):
             w.setEnabled(enabled)
         self._loading = True
         if f:
@@ -420,12 +476,14 @@ class ColumnsDialog(Panel):
             self.type_combo.setCurrentIndex(max(0, self.types.index(f['type']) if f['type'] in self.types else 0))
             self.options_edit.setText(', '.join(f.get('options', [])) if isinstance(f.get('options'), list) else '')
             self.visible_box.setChecked(bool(f.get('visible', True)))
+            self.total_box.setChecked(shows_total(f))
             self.key_label.setText('Internal key: %s' % f['key'])
         else:
             self.name_edit.clear()
             self.options_edit.clear()
             self.key_label.clear()
         self.options_block.setVisible(bool(f) and f['type'] == 'select')
+        self.total_box.setVisible(bool(f) and f['type'] == 'number')
         self._loading = False
 
     # -- edits ----------------------------------------------------------------------------------
@@ -448,6 +506,7 @@ class ColumnsDialog(Panel):
             return
         f['type'] = self.type_combo.currentData()
         self.options_block.setVisible(f['type'] == 'select')
+        self.total_box.setVisible(f['type'] == 'number')
         self._touch()
 
     def _options_changed(self, text):
@@ -455,6 +514,12 @@ class ColumnsDialog(Panel):
         if self._loading or not f:
             return
         f['options'] = [v.strip() for v in text.split(',') if v.strip()]
+
+    def _total_changed(self, checked):
+        f = self.current()
+        if self._loading or not f:
+            return
+        f['total'] = bool(checked)
 
     def _visible_changed(self, checked):
         f = self.current()
@@ -522,6 +587,24 @@ class LogbookDialog(Panel):
         self.desc_edit.setFixedHeight(84)
         self.desc_edit.setPlaceholderText('What is this logbook for? (optional)')
         self.body.addWidget(field_block('Description', self.desc_edit))
+        # template (new logbooks only)
+        self.template_combo = None
+        if book is None:
+            from . import templates
+            self.template_combo = QComboBox()
+            self.template_combo.setAccessibleName('Start from')
+            for name in templates.NAMES:
+                cols = ', '.join(f['label'] for f in templates.TEMPLATES[name]['fields'])
+                self.template_combo.addItem(name, name)
+                self.template_combo.setItemData(self.template_combo.count() - 1, cols, Qt.ItemDataRole.ToolTipRole)
+            self.template_columns = label('', 'faint', wrap=True)
+            self.template_combo.currentIndexChanged.connect(lambda _i: self._template_changed())
+            box = QWidget()
+            bl = vbox(box, (0, 0, 0, 0), 4)
+            bl.addWidget(self.template_combo)
+            bl.addWidget(self.template_columns)
+            self.body.addWidget(field_block('Start from', box, 'Every column can be changed later under Columns.'))
+            self._last_template_desc = ''
         # symbol grid
         grid_box = QWidget()
         grid = QGridLayout(grid_box)
@@ -580,8 +663,24 @@ class LogbookDialog(Panel):
             self.folder_combo.setCurrentIndex(max(0, self.folder_combo.findData(book['folder_id'])))
         self.body.addWidget(field_block('Folder', self.folder_combo))
         self.body.addStretch(1)
+        if self.template_combo is not None:
+            self._template_changed()
         self.add_buttons('Save changes' if book else 'Create logbook', self.save)
         QTimer.singleShot(0, self.name_edit.setFocus)
+
+    def _template_changed(self):
+        from . import templates
+        name = self.template_combo.currentData()
+        tpl = templates.TEMPLATES[name]
+        self.template_columns.setText('Columns: ' + ', '.join(f['label'] for f in tpl['fields']))
+        if self.desc_edit.toPlainText().strip() in ('', self._last_template_desc):
+            self.desc_edit.setPlainText(tpl['description'])
+        self._last_template_desc = tpl['description']
+        if self.icon == DEFAULT_ICON or self.icon in {t['icon'] for t in templates.TEMPLATES.values()}:
+            self.icon = tpl['icon']
+            for b in self.group.buttons():
+                b.setChecked(b.text() == self.icon)
+            self._refresh_preview()
 
     def _refresh_preview(self):
         self.preview.configure(self.icon, '', theme.book_color(self.book['id'] if self.book else 0, self.accent))
@@ -623,7 +722,8 @@ class LogbookDialog(Panel):
             self.set_error('Use a colour like #4f8cff, or choose Auto.')
             return
         self.result_data = dict(name=name, description=self.desc_edit.toPlainText(), icon=self.icon or DEFAULT_ICON,
-                                accent=text, folder_id=self.folder_combo.currentData())
+                                accent=text, folder_id=self.folder_combo.currentData(),
+                                template=self.template_combo.currentData() if self.template_combo else None)
         self.accept()
 
 

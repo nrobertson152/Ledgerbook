@@ -44,8 +44,12 @@ Ledgerbook 1.0.0 is the first stable release. It keeps every feature from the be
 - **Undo for deletes** instead of confirmation prompts. Deleted items also go to a Recycle Bin you can restore from.
 - **Archiving** for logbooks you're finished with but want to keep.
 - **PDF reports** with your choice of columns and date range, shaded headers, banded rows, page numbers and an optional landscape layout.
-- **Import and export** as CSV or `.ledgerbook` files.
+- **Import and export** as CSV or `.ledgerbook` files. CSV headings match your columns whatever their case or spacing; a bad value stops the import with its row number and nothing is added.
 - **Backups**: manual and automatic backups, restore, and database integrity checks.
+- **Templates** for new logbooks: vehicle maintenance, equipment & calibration, expenses, inspections and a project log, each a normal logbook you can change afterwards.
+- **Due dates** (*Due date* columns): overdue and upcoming items are coloured in the table and listed under *Coming up* on Home. Only the newest entry for each item counts, so a done task stops nagging. Quick buttons set the next due date 1, 3, 6 or 12 months after the entry.
+- **Totals** of number columns under the table, following your search, and at the end of PDF reports. Numbers may be typed as you write them: `$1,234.50`, `€ 45`, `(12.50)`.
+- **Attachments** can be picked with *Browse…* and opened from the entry's right-click menu.
 - **RevisionWorx document columns**: a column type that holds a document number such as `DWG-100`. When [RevisionWorx](https://github.com/nrobertson152/RevisionWorx) is installed, the table shows each document's live revision and state, the entry editor can pick documents, and the entry menu opens the document in RevisionWorx (F5 refreshes). Without RevisionWorx the number is plain text.
 - **Four themes**: Midnight, Graphite, Terracotta and Light, checked for readable contrast and using the bundled Inter typeface.
 

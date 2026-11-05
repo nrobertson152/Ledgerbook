@@ -1,9 +1,13 @@
 """The two main screens: the home dashboard and the logbook table."""
+from datetime import date
+from pathlib import Path
+
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QScrollArea, QSizePolicy,
                                QStackedWidget, QTableWidget, QTableWidgetItem, QWidget, QGridLayout)
 
+from . import insights
 from . import revisionworx as rwxlink
 from . import theme
 from .constants import DEFAULT_ICON
@@ -46,8 +50,9 @@ class WelcomeView(QScrollArea):
         row.addStretch(1)
         self.col = vbox(self.content, (0, 28, 0, 40), 22)
 
-    def refresh(self, overview, recent):
-        """``recent`` is a list of (book row, last entry date or None)."""
+    def refresh(self, overview, recent, upcoming=()):
+        """``recent`` is a list of (book row, last entry date or None); ``upcoming`` comes from
+        ``insights.upcoming`` (what is overdue or due soon)."""
         win = self.win
         clear_layout(self.col)
         # ---- hero
@@ -83,6 +88,9 @@ class WelcomeView(QScrollArea):
             card.body.addWidget(label(note, 'faint'))
             stats.addWidget(card, 1)
         self.col.addLayout(stats)
+        # ---- coming up (Due date columns)
+        if upcoming:
+            self.col.addWidget(self._upcoming_card(list(upcoming)))
         # ---- recent logbooks
         head = hbox(None, (0, 6, 0, 0), 8)
         head.addWidget(label('Pick up where you left off', 'h2'))
@@ -106,6 +114,39 @@ class WelcomeView(QScrollArea):
         tip.addStretch(1)
         self.col.addLayout(tip)
         self.col.addStretch(1)
+
+    def _upcoming_card(self, items, limit=8):
+        card = Card(20, 6)
+        head = hbox(None, (0, 0, 0, 4), 8)
+        head.addWidget(label('Coming up', 'h2'))
+        overdue = sum(1 for it in items if it['days'] < 0)
+        head.addWidget(label(('%d overdue  ·  ' % overdue if overdue else '') +
+                             'due in the next %d days' % insights.HORIZON_DAYS, 'faint'))
+        head.addStretch(1)
+        card.body.addLayout(head)
+        t = theme.current()
+        self.upcoming_rows = []
+        for it in items[:limit]:
+            row = ClickCard(10, 2)
+            line = hbox(None, (0, 0, 0, 0), 12)
+            when = label(insights.due_text(it['days']), 'h3')
+            tone = 'bad' if it['days'] < 0 else ('warn' if it['days'] <= insights.SOON_DAYS else 'muted')
+            when.setStyleSheet('color: %s;' % t[tone])
+            when.setMinimumWidth(130)
+            line.addWidget(when)
+            what = label('%s  ·  %s' % (it['item'], it['field']), 'h3')
+            what.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            what.setMinimumWidth(10)
+            line.addWidget(what, 1)
+            line.addWidget(label('%s  ·  %s' % (it['book'], fmt_date(it['due'])), 'faint'))
+            row.body.addLayout(line)
+            row.setToolTip('Open %s at this entry' % it['book'])
+            row.clicked.connect(lambda b=it['book_id'], e=it['entry_id']: self.win.open_entry(b, e))
+            card.body.addWidget(row)
+            self.upcoming_rows.append((it, row))
+        if len(items) > limit:
+            card.body.addWidget(label('…and %d more' % (len(items) - limit), 'faint'))
+        return card
 
     def _book_card(self, book, last_date):
         card = ClickCard(18, 12)
@@ -240,6 +281,12 @@ class LogbookView(QWidget):
         self.nores_buttons.addWidget(button('Clear search', '', 'x', self.search.clear))
         lay.addWidget(self.stack, 1)
         # ---- footer
+        self.totals = label('', 'muted', wrap=True)
+        self.totals.setAccessibleName('Totals of the number columns for the entries shown')
+        self.totals.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.totals.setContentsMargins(2, 0, 2, 0)
+        self.totals.hide()
+        lay.addWidget(self.totals)
         foot = hbox(None, (2, 0, 2, 0), 8)
         self.count = label('', 'faint')
         foot.addWidget(self.count)
@@ -321,6 +368,10 @@ class LogbookView(QWidget):
             self.edit_btn.setEnabled(n == 1)
             self.dup_btn.setEnabled(n == 1)
 
+    def set_totals(self, text):
+        self.totals.setText(text)
+        self.totals.setVisible(bool(text))
+
     def set_sort_chip(self, text):
         self.sort_chip.setVisible(bool(text))
         self.sort_chip.setText(text)
@@ -330,6 +381,7 @@ class LogbookView(QWidget):
         (revisionworx.index) for live status in RevisionWorx document columns, or None."""
         t = T()
         table = self.table
+        today = date.today()
         table.setUpdatesEnabled(False)
         table.clearContents()
         table.setColumnCount(len(fields) + 1)
@@ -357,6 +409,20 @@ class LogbookView(QWidget):
                     cell.setForeground(accent if is_true(full) else faint)
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     cell.setData(Qt.ItemDataRole.UserRole, full)
+                    table.setItem(i, j, cell)
+                    continue
+                if f['type'] == 'due':
+                    text, tone = insights.due_cell(full, today)
+                    cell = QTableWidgetItem(text)
+                    cell.setData(Qt.ItemDataRole.UserRole, full)
+                    if tone:
+                        cell.setForeground(QColor(t[tone]))
+                    table.setItem(i, j, cell)
+                    continue
+                if f['type'] == 'attachment' and full.strip():
+                    cell = QTableWidgetItem(Path(full.strip()).name or full)
+                    cell.setData(Qt.ItemDataRole.UserRole, full)
+                    cell.setToolTip(full + ('' if Path(full.strip()).exists() else '\n(file not found)'))
                     table.setItem(i, j, cell)
                     continue
                 if f['type'] == 'revision':

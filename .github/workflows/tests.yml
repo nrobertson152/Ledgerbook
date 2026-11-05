@@ -31,3 +31,18 @@ jobs:
           python -m pip install "PySide6-Essentials>=6.7,<7" "revisionworx @ git+https://github.com/nrobertson152/RevisionWorx@main"
       - name: Tests (offscreen Qt, real RevisionWorx required)
         run: LEDGERBOOK_REQUIRE_RWX=1 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
+
+  screenshots:
+    name: "Screenshots for design review"
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: System libraries Qt needs
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libegl1 libxkbcommon-x11-0 libxcb-cursor0 fonts-noto-color-emoji
+      - run: python -m pip install "PySide6-Essentials>=6.7,<7"
+      - name: Screenshots (base64 in this log)
+        run: QT_QPA_PLATFORM=offscreen python tests/screenshots.py shots

@@ -14,7 +14,7 @@ LOGBOOK_ICONS = [
 DEFAULT_ICON = '▤'
 
 TYPE_NAMES = {'text': 'Text', 'number': 'Number', 'date': 'Date', 'checkbox': 'Checkbox', 'select': 'Dropdown',
-              'multiline': 'Long text', 'attachment': 'Attachment',
+              'multiline': 'Long text', 'attachment': 'Attachment', 'due': 'Due date',
               'revision': 'RevisionWorx document'}
 
 TRUE_VALUES = ('1', 'true', 'yes', 'on')
