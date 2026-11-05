@@ -37,6 +37,12 @@ class RevisionColumns(unittest.TestCase):
         from ledgerbook.prefs import Prefs
         Prefs().set('seen_version', VERSION)          # no "What's new" dialog blocking the event loop
         self.qt = QApplication.instance() or QApplication([])
+        # A window from an earlier test in this process may still have its startup "What's new" timer pending;
+        # processing events here would open that modal dialog and block. These tests never need it.
+        from ledgerbook import app as A
+        original = A.Main.show_whats_new
+        A.Main.show_whats_new = lambda self, force=False: None
+        self.addCleanup(setattr, A.Main, 'show_whats_new', original)
 
     def wait(self, cond, what):
         end = time.time() + 10

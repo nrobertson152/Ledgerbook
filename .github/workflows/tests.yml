@@ -13,6 +13,7 @@ jobs:
   test:
     name: "Linux / Python ${{ matrix.python }}"
     runs-on: ubuntu-22.04
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
