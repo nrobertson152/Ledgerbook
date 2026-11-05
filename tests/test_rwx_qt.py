@@ -131,5 +131,24 @@ class RevisionColumns(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+def tearDownModule():
+    """Delete every window (this module's and earlier modules') before the interpreter tears Qt down: Python-owned
+    widgets outliving their QApplication segfaulted the process at exit after all tests had passed (CI 622c5cd)."""
+    if PySide6 is None:
+        return
+    import gc
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in QApplication.topLevelWidgets():
+        w.close()
+        w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+    gc.collect()
+
+
 if __name__ == '__main__':
     unittest.main()
