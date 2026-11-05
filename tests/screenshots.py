@@ -49,8 +49,11 @@ def main(out: Path) -> int:
     shots = []
 
     def shot(widget, name):
-        for _ in range(6):
+        import time
+        end = time.time() + 0.6                   # let the fade-in animations (150-220 ms) finish
+        while time.time() < end:
             qt.processEvents()
+            time.sleep(0.02)
         path = out / ('%s.png' % name)
         widget.grab().save(str(path))
         shots.append(path)
@@ -67,6 +70,13 @@ def main(out: Path) -> int:
     dlg.show()
     shot(dlg, 'new-logbook-template')
     dlg.close()
+    from ledgerbook.dialogs import ColumnsDialog
+    cd = ColumnsDialog(w, s, car, 'Service truck')
+    cd.list.setCurrentRow(2)                      # Odometer: a number column with its total switched off
+    cd.resize(760, 560)
+    cd.show()
+    shot(cd, 'columns-total-option')
+    cd.close()
     ed = EntryDialog(w, s, car, None, 'Service truck')
     ed.resize(580, 760)
     ed.show()
@@ -87,4 +97,4 @@ def main(out: Path) -> int:
 if __name__ == '__main__':
     count = main(Path(sys.argv[1] if len(sys.argv) > 1 else 'shots'))
     sys.stdout.flush()
-    os._exit(0 if count == 5 else 1)               # skip interpreter teardown of Qt objects
+    os._exit(0 if count == 6 else 1)               # skip interpreter teardown of Qt objects

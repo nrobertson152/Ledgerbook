@@ -10,7 +10,7 @@ TEMPLATES = {
     'Blank': dict(icon='▤', description='', fields=[
         _f('entry_date', 'Date', 'date'), _f('title', 'Entry'), _f('notes', 'Notes')]),
     'Vehicle maintenance': dict(icon='🚗', description='Services, repairs and what is due next.', fields=[
-        _f('entry_date', 'Date', 'date'), _f('title', 'Service'), _f('reading', 'Odometer', 'number'),
+        _f('entry_date', 'Date', 'date'), _f('title', 'Service'), _f('reading', 'Odometer', 'number', total=False),
         _f('cost', 'Cost', 'number'), _f('next_due', 'Next due', 'due'), _f('shop', 'Shop'),
         _f('notes', 'Notes', 'multiline')]),
     'Equipment & calibration': dict(icon='🔧', description='Calibration and inspection records with due dates.',

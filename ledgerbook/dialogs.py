@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComb
 
 from . import icons, theme
 from .constants import DEFAULT_ICON, LOGBOOK_ICONS, TYPE_NAMES
+from .insights import shows_total
 from .store import TYPES
 from .util import fmt_timestamp, is_true, plural
 from .widgets import (IconTile, button, divider, hbox, icon_label, label, set_button_icon, vbox)
@@ -270,9 +271,12 @@ class EntryDialog(Panel):
             elif typ == 'due':
                 row = QWidget()
                 rl = hbox(row, (0, 0, 0, 0), 6)
+                w.setMinimumWidth(150)
                 rl.addWidget(w, 1)
                 for text, months in (('+1 mo', 1), ('+3 mo', 3), ('+6 mo', 6), ('+1 yr', 12)):
-                    b = size_button(button(text, 'ghost', None, lambda e=w, m=months: self.set_due(e, m)))
+                    b = button(text, 'ghost', None, lambda e=w, m=months: self.set_due(e, m))
+                    b.setMinimumHeight(40)
+                    b.setFixedWidth(b.fontMetrics().horizontalAdvance(text) + 30)
                     b.setToolTip('Due %s after the entry date (or today)' % ('1 year' if months == 12 else
                                                                             '%d month%s' % (months, 's' * (months > 1))))
                     rl.addWidget(b)
@@ -421,6 +425,11 @@ class ColumnsDialog(Panel):
         self.visible_box = QCheckBox('Show this column in the logbook table')
         self.visible_box.toggled.connect(self._visible_changed)
         right.addWidget(self.visible_box)
+        self.total_box = QCheckBox('Show a total under the table')
+        self.total_box.setToolTip('Sum and average of the entries shown. Turn off for readings such as an odometer, '
+                                  'where a sum means nothing.')
+        self.total_box.toggled.connect(self._total_changed)
+        right.addWidget(self.total_box)
         self.key_label = label('', 'faint')
         right.addWidget(self.key_label)
         right.addStretch(1)
@@ -458,8 +467,8 @@ class ColumnsDialog(Panel):
             return
         f = self.current()
         enabled = f is not None
-        for w in (self.name_edit, self.type_combo, self.options_edit, self.visible_box, self.up_btn, self.down_btn,
-                  self.remove_btn):
+        for w in (self.name_edit, self.type_combo, self.options_edit, self.visible_box, self.total_box, self.up_btn,
+                  self.down_btn, self.remove_btn):
             w.setEnabled(enabled)
         self._loading = True
         if f:
@@ -467,12 +476,14 @@ class ColumnsDialog(Panel):
             self.type_combo.setCurrentIndex(max(0, self.types.index(f['type']) if f['type'] in self.types else 0))
             self.options_edit.setText(', '.join(f.get('options', [])) if isinstance(f.get('options'), list) else '')
             self.visible_box.setChecked(bool(f.get('visible', True)))
+            self.total_box.setChecked(shows_total(f))
             self.key_label.setText('Internal key: %s' % f['key'])
         else:
             self.name_edit.clear()
             self.options_edit.clear()
             self.key_label.clear()
         self.options_block.setVisible(bool(f) and f['type'] == 'select')
+        self.total_box.setVisible(bool(f) and f['type'] == 'number')
         self._loading = False
 
     # -- edits ----------------------------------------------------------------------------------
@@ -495,6 +506,7 @@ class ColumnsDialog(Panel):
             return
         f['type'] = self.type_combo.currentData()
         self.options_block.setVisible(f['type'] == 'select')
+        self.total_box.setVisible(f['type'] == 'number')
         self._touch()
 
     def _options_changed(self, text):
@@ -502,6 +514,12 @@ class ColumnsDialog(Panel):
         if self._loading or not f:
             return
         f['options'] = [v.strip() for v in text.split(',') if v.strip()]
+
+    def _total_changed(self, checked):
+        f = self.current()
+        if self._loading or not f:
+            return
+        f['total'] = bool(checked)
 
     def _visible_changed(self, checked):
         f = self.current()

@@ -57,6 +57,21 @@ class Improvements(unittest.TestCase):
         edit = LogbookDialog(self.w, self.w.store, self.w.store.book(self.book('Blank')))
         self.assertIsNone(edit.template_combo)                         # existing logbooks keep their columns
 
+    def test_columns_dialog_total_option(self):
+        from ledgerbook.dialogs import ColumnsDialog
+        bid = self.book('Vehicle maintenance')
+        dlg = ColumnsDialog(self.w, self.w.store, bid, 'Truck')
+        dlg.show()
+        dlg.list.setCurrentRow(1)                                          # Service: text, no total option
+        self.assertFalse(dlg.total_box.isVisible())
+        dlg.list.setCurrentRow(2)                                          # Odometer: number, total off
+        self.assertTrue(dlg.total_box.isVisible())
+        self.assertFalse(dlg.total_box.isChecked())
+        dlg.total_box.setChecked(True)
+        dlg.save()
+        self.assertTrue(self.w.store.columns(bid)[2]['total'])
+        dlg.close()
+
     def test_totals_follow_the_search(self):
         bid = self.book('Expenses')
         for title, amount in (('Saw', '$1,200'), ('Blades', '34.50'), ('Glue', '')):

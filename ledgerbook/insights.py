@@ -53,11 +53,21 @@ def fmt_number(value):
     return text[:-3] if text.endswith('.00') else text
 
 
+def shows_total(field):
+    """Whether a number column is totalled under the table. A sum is meaningless for readings such as an
+    odometer, so the old fixed "reading" (Measurement / Odometer) column is off unless switched on; every other
+    number column is on unless switched off (Columns → Show a total)."""
+    if field.get('type') != 'number':
+        return False
+    return bool(field.get('total', field.get('key') != 'reading'))
+
+
 def column_totals(fields, rows):
-    """For each number field with at least one value among ``rows`` (value dicts): count, sum, average, min, max."""
+    """For each totalled number field with at least one value among ``rows`` (value dicts): count, sum, average,
+    min, max."""
     out = []
     for f in fields:
-        if f.get('type') != 'number':
+        if not shows_total(f):
             continue
         nums = []
         for values in rows:

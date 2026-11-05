@@ -35,6 +35,16 @@ class Numbers(unittest.TestCase):
         self.assertEqual(I.totals_text(fields, [{'cost': '5'}]), 'Cost: total 5')
         self.assertEqual(I.fmt_number(-1234567.0), '-1,234,567')
 
+    def test_readings_are_not_summed(self):
+        reading = {'key': 'reading', 'label': 'Odometer', 'type': 'number'}
+        self.assertFalse(I.shows_total(reading))                       # a summed odometer means nothing
+        self.assertTrue(I.shows_total(dict(reading, total=True)))      # unless switched on
+        self.assertFalse(I.shows_total({'key': 'cost', 'label': 'Cost', 'type': 'number', 'total': False}))
+        self.assertFalse(I.shows_total({'key': 'x', 'label': 'X', 'type': 'text'}))
+        fields = templates.fields('Vehicle maintenance')
+        rows = [{'reading': '45000', 'cost': '90'}, {'reading': '47000', 'cost': '10'}]
+        self.assertEqual(I.totals_text(fields, rows), 'Cost: total 100 · average 50')
+
 
 class DueDates(unittest.TestCase):
     def test_cells(self):
