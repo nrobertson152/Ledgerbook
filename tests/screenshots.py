@@ -8,6 +8,8 @@ import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))     # run as a script: import ledgerbook from the repo
+
 
 def main(out: Path) -> int:
     tmp = tempfile.mkdtemp(prefix='ledgerbook-shots-')
