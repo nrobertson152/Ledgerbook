@@ -104,6 +104,32 @@ class RevisionColumns(unittest.TestCase):
         dlg.reject()
         w.close()
 
+    def test_a_late_result_after_close_is_ignored(self):
+        """Regression (CI 06ada7d): a RevisionWorx answer arriving after the window closed ran load_rows() on the
+        closed database (sqlite3.ProgrammingError)."""
+        import threading
+        gate = threading.Event()
+
+        class Slow(Fake):
+            def documents(self, project=None, text=''):
+                gate.wait(5)
+                return super().documents()
+        w, bid = self.make(Slow())                       # starts a background listing that waits on the gate
+        w.close()
+        errors = []
+        import sys
+        old_hook = sys.excepthook
+        sys.excepthook = lambda *exc: errors.append(exc)
+        try:
+            gate.set()
+            end = time.time() + 1.5
+            while time.time() < end:
+                self.qt.processEvents()
+                time.sleep(0.02)
+        finally:
+            sys.excepthook = old_hook
+        self.assertEqual(errors, [])
+
 
 if __name__ == '__main__':
     unittest.main()

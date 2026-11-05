@@ -68,6 +68,7 @@ class Main(QMainWindow):
         self._rwx_docs = None
         self._rwx_loaded_at = 0.0
         self._rwx_loading = False
+        self._closing = False
         self.setWindowTitle('Ledgerbook · ' + VERSION)
         if APP_ICON.exists():
             self.setWindowIcon(QIcon(str(APP_ICON)))
@@ -610,6 +611,8 @@ class Main(QMainWindow):
         fut = self._pool.submit(fn)
 
         def check():
+            if self._closing:              # the window (and its database) is gone: drop late results
+                return
             if not fut.done():
                 QTimer.singleShot(50, check)
                 return
@@ -1142,6 +1145,7 @@ class Main(QMainWindow):
         self.show_whats_new(force=True)
 
     def closeEvent(self, event):
+        self._closing = True
         self._pool.shutdown(wait=False)
         if self.settings_dialog is not None:
             self.settings_dialog.close()
