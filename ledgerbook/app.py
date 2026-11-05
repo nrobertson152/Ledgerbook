@@ -2,6 +2,8 @@
 import re
 import sqlite3
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QMainWindow, Q
                                QWidget)
 
 from . import VERSION, icons, theme
+from . import revisionworx as rwxlink
 from .constants import DEFAULT_ICON
 from .dialogs import (ArchiveDialog, ColumnsDialog, EntryDialog, FullTextDialog, LogbookDialog, PdfDialog,
                       RecycleDialog, WhatsNewDialog, choose, confirm, error, notify, pick_item, prompt)
@@ -34,7 +37,9 @@ def slug(text):
 
 
 class Main(QMainWindow):
-    def __init__(self):
+    RWX_STALE_SECONDS = 30
+
+    def __init__(self, rwx=None):
         super().__init__()
         global _fonts_loaded
         if not _fonts_loaded:
@@ -56,6 +61,13 @@ class Main(QMainWindow):
         self._building_tree = False
         self._recent_order = [str(x) for x in self.prefs.get('recent_books', [])]
         self._visible_fields = []
+        # RevisionWorx (optional): None while looking for it, False when not installed, else a client.
+        self.rwx = rwx
+        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='ledgerbook-bg')
+        self._rwx_index = None
+        self._rwx_docs = None
+        self._rwx_loaded_at = 0.0
+        self._rwx_loading = False
         self.setWindowTitle('Ledgerbook · ' + VERSION)
         if APP_ICON.exists():
             self.setWindowIcon(QIcon(str(APP_ICON)))
@@ -69,6 +81,8 @@ class Main(QMainWindow):
         self.reload_tree(fresh=True)
         self.go_home()
         self.auto_backup()
+        if self.rwx is None:
+            self.in_background(rwxlink.probe, self._rwx_ready)
         QTimer.singleShot(300, self.show_whats_new)
 
     # ===================================================================================== layout
@@ -191,6 +205,7 @@ class Main(QMainWindow):
             bind(keys, fn)
         bind('Delete', self.delete_entries, self.table, Qt.ShortcutContext.WidgetShortcut)
         bind('Return', self.edit_entry, self.table, Qt.ShortcutContext.WidgetShortcut)
+        bind('F5', self.refresh_rwx)
 
     def restore_geometry(self):
         match = re.match(r'(\d+)x(\d+)', str(self.prefs.get('geometry', '')))
@@ -499,7 +514,7 @@ class Main(QMainWindow):
         self._rendering = True
         try:
             self.view.populate(fields, [(r['id'], self.store.values(r)) for r in rows], self.sort_key,
-                               self.sort_reverse, widths)
+                               self.sort_reverse, widths, self._rwx_index_for(fields))
         finally:
             self._rendering = False
         total = self.store.db.execute('SELECT COUNT(*) FROM entries WHERE book_id=?', (self.current,)).fetchone()[0]
@@ -583,9 +598,92 @@ class Main(QMainWindow):
         edit = menu.addAction('Edit entry', self.edit_entry)
         edit.setEnabled(n == 1)
         menu.addAction('Duplicate' if n == 1 else 'Duplicate %d entries' % n, self.duplicate_entry)
+        for number in (self.revision_values(self.selected_rows()[0]) if n == 1 and self.rwx else []):
+            menu.addAction('Show %s in RevisionWorx' % number, lambda num=number: self.show_in_rwx(num))
         menu.addSeparator()
         menu.addAction('Delete' if n == 1 else 'Delete %d entries' % n, self.delete_entries)
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    # ===================================================================================== RevisionWorx (optional)
+    def in_background(self, fn, done):
+        """Run ``fn`` off the UI thread; ``done(value, error)`` runs on the UI thread afterwards."""
+        fut = self._pool.submit(fn)
+
+        def check():
+            if not fut.done():
+                QTimer.singleShot(50, check)
+                return
+            try:
+                value, err = fut.result(), None
+            except Exception as e:  # noqa: BLE001
+                value, err = None, e
+            try:
+                done(value, err)
+            except RuntimeError:
+                pass
+        QTimer.singleShot(50, check)
+
+    def _rwx_ready(self, rwx, _err):
+        self.rwx = rwx or False
+        if self.rwx and self.current:
+            self.load_rows()
+
+    def _rwx_index_for(self, fields):
+        """The document index when the shown columns need it; starts a background refresh when it is stale."""
+        if not self.rwx or not any(f['type'] == 'revision' for f in fields):
+            return None
+        if time.monotonic() - self._rwx_loaded_at > self.RWX_STALE_SECONDS and not self._rwx_loading:
+            self._rwx_loading = True
+            self.in_background(self.rwx.documents, self._rwx_documents_loaded)
+        return self._rwx_index
+
+    def _rwx_documents_loaded(self, docs, err):
+        self._rwx_loading = False
+        self._rwx_loaded_at = time.monotonic()
+        if err is None:
+            self._rwx_docs, self._rwx_index = docs, rwxlink.index(docs)
+        elif self._rwx_index is None:
+            self.say('RevisionWorx status unavailable: %s' % err, 'warn')
+        if self.current:
+            self.load_rows()
+
+    def rwx_documents(self, fresh=False):
+        """Every RevisionWorx document (for pickers). Raises RwxError."""
+        if fresh or self._rwx_docs is None:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                docs = self.rwx.documents()
+            finally:
+                QApplication.restoreOverrideCursor()
+            self._rwx_docs, self._rwx_index, self._rwx_loaded_at = docs, rwxlink.index(docs), time.monotonic()
+        return self._rwx_docs
+
+    def refresh_rwx(self):
+        self._rwx_loaded_at = 0.0
+        if self.current:
+            self.load_rows()
+
+    def revision_values(self, row_index):
+        """Document numbers in the RevisionWorx document columns of a table row."""
+        if not self.current or row_index >= len(self.row_ids):
+            return []
+        row = self.store.db.execute('SELECT * FROM entries WHERE id=?', (self.row_ids[row_index],)).fetchone()
+        if row is None:
+            return []
+        values = self.store.values(row)
+        out = []
+        for f in self.store.columns(self.current):
+            v = str(values.get(f['key'], '') or '').strip()
+            if f['type'] == 'revision' and v and v not in out:
+                out.append(v)
+        return out
+
+    def show_in_rwx(self, number):
+        """Open the document in the RevisionWorx window."""
+        doc, _problem = rwxlink.lookup(number, self._rwx_index)
+        ref = doc['id'] if doc else number
+        self.in_background(lambda: self.rwx.open(document=ref),
+                           lambda _v, e: e is not None and self.say(str(e), 'bad'))
 
     # ===================================================================================== entries
     def _need_book(self):
@@ -1044,6 +1142,7 @@ class Main(QMainWindow):
         self.show_whats_new(force=True)
 
     def closeEvent(self, event):
+        self._pool.shutdown(wait=False)
         if self.settings_dialog is not None:
             self.settings_dialog.close()
         self.save_widths()
