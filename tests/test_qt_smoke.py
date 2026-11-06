@@ -8,6 +8,8 @@ try:
 except ImportError:
     PySide6 = None
 
+import qt_cleanup
+
 
 @unittest.skipIf(PySide6 is None, 'PySide6 not installed')
 class Smoke(unittest.TestCase):
@@ -29,6 +31,12 @@ class Smoke(unittest.TestCase):
             w.change_theme(name)
         w.close()
         self.assertTrue(qt)
+
+
+def tearDownModule():
+    if PySide6 is not None:
+        qt_cleanup.delete_windows()
+        qt_cleanup.install()
 
 
 if __name__ == '__main__':
