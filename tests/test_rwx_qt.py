@@ -9,6 +9,8 @@ try:
 except ImportError:
     PySide6 = None
 
+import qt_cleanup
+
 
 class Fake:
     def __init__(self):
@@ -132,22 +134,11 @@ class RevisionColumns(unittest.TestCase):
 
 
 def tearDownModule():
-    """Delete every window (this module's and earlier modules') before the interpreter tears Qt down: Python-owned
-    widgets outliving their QApplication segfaulted the process at exit after all tests had passed (CI 622c5cd)."""
+    """Delete every window before the next module, and Qt itself before Python shuts down (see qt_cleanup)."""
     if PySide6 is None:
         return
-    import gc
-    from PySide6.QtCore import QCoreApplication, QEvent
-    from PySide6.QtWidgets import QApplication
-    app = QApplication.instance()
-    if app is None:
-        return
-    for w in QApplication.topLevelWidgets():
-        w.close()
-        w.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    app.processEvents()
-    gc.collect()
+    qt_cleanup.delete_windows()
+    qt_cleanup.install()
 
 
 if __name__ == '__main__':
