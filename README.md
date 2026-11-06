@@ -156,6 +156,8 @@ packaging/appimage/    AppImage build script, AppRun and desktop entry
 ```bash
 # Storage, preferences, helpers and theme contrast (no Qt needed)
 PYTHONPATH=. python3 -m unittest discover -s tests
+# The calendar export is also read back by the icalendar package when it's installed (CI installs it)
+python3 -m pip install icalendar
 
 # Real-Qt smoke test and screenshots of every screen (needs PySide6; runs offscreen)
 python3 tests/test_qt_smoke.py
