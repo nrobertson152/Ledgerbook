@@ -174,7 +174,61 @@ def upcoming(store, today=None, horizon=HORIZON_DAYS):
             days = days_until(values.get(f['key']), today)
             if days is not None and days <= horizon:
                 out.append({'book_id': book['id'], 'book': book['name'], 'entry_id': entry_id,
-                            'item': item_name(fields, values) or 'Entry', 'field': f['label'],
+                            'item': item_name(fields, values) or 'Entry', 'field': f['label'], 'key': f['key'],
                             'due': str(values.get(f['key'])).strip(), 'days': days})
     out.sort(key=lambda d: (d['days'], d['book'].casefold(), d['item'].casefold()))
     return out
+
+
+# ======================================================================================== due dates in a calendar
+
+def due_dates(store, today=None):
+    """Every logbook's current due dates, overdue or not, as ``upcoming`` lists them."""
+    return upcoming(store, today, horizon=10 ** 6)
+
+
+def _ics_text(value):
+    """A value as iCalendar text (RFC 5545 3.3.11): backslash, semicolon, comma and line breaks escaped."""
+    return (str(value).replace('\\', '\\\\').replace(';', '\\;').replace(',', '\\,')
+            .replace('\r\n', '\\n').replace('\n', '\\n').replace('\r', '\\n'))
+
+
+def _ics_line(line):
+    """One content line, folded so no line is longer than 75 octets (RFC 5545 3.1), never inside a character."""
+    out, chunk, size = [], '', 0
+    for ch in line:
+        n = len(ch.encode('utf-8'))
+        if size + n > (75 if not out else 74):
+            out.append(chunk)
+            chunk, size = '', 0
+        chunk += ch
+        size += n
+    out.append(chunk)
+    return '\r\n '.join(out)
+
+
+def calendar(items, stamp=None):
+    """Due dates (as ``upcoming`` lists them) as an iCalendar file, for Google Calendar, Outlook, Thunderbird or Apple's Calendar:
+    one all-day event on each due date, with a reminder the day before. Each has the same UID every time it's exported, so importing
+    a newer export updates the events instead of adding them again. ``stamp`` is when it was made (UTC), for DTSTAMP."""
+    from datetime import timedelta, timezone
+    stamp = stamp or datetime.now(timezone.utc)
+    lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ledgerbook//Due dates//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+             'X-WR-CALNAME:Ledgerbook due dates']
+    for it in items:
+        day = parse_day(it.get('due'))
+        if day is None:
+            continue
+        summary = '%s due · %s' % (it.get('item') or 'Entry', it.get('book') or 'Ledgerbook')
+        lines += ['BEGIN:VEVENT',
+                  'UID:ledgerbook-%s-%s-%s@ledgerbook' % (it.get('book_id'), it.get('entry_id'), it.get('key') or 'due'),
+                  'DTSTAMP:%s' % stamp.strftime('%Y%m%dT%H%M%SZ'),
+                  'DTSTART;VALUE=DATE:%s' % day.strftime('%Y%m%d'),
+                  'DTEND;VALUE=DATE:%s' % (day + timedelta(days=1)).strftime('%Y%m%d'),
+                  'SUMMARY:%s' % _ics_text(summary),
+                  'DESCRIPTION:%s' % _ics_text('%s in the %s logbook, from Ledgerbook.' % (it.get('field') or 'Due date', it.get('book') or '')),
+                  'TRANSP:TRANSPARENT',
+                  'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-P1D', 'DESCRIPTION:%s' % _ics_text(summary), 'END:VALARM',
+                  'END:VEVENT']
+    lines.append('END:VCALENDAR')
+    return ''.join(_ics_line(x) + '\r\n' for x in lines).encode('utf-8')

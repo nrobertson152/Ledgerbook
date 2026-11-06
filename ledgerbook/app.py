@@ -169,6 +169,7 @@ class Main(QMainWindow):
         add(f, 'Export logbook…', self.export_book)
         add(f, 'Export CSV…', self.export_csv)
         add(f, 'PDF report…', self.export_pdf)
+        add(f, 'Export due dates to a calendar…', self.export_calendar)
         f.addSeparator()
         add(f, 'Back up database…', self.backup)
         add(f, 'Restore backup…', self.restore_backup)
@@ -1022,6 +1023,32 @@ class Main(QMainWindow):
                 return
             self.say('CSV exported', 'good', 'Show', lambda: self._reveal(path))
 
+    def export_calendar(self, path=None):
+        """Every logbook's current due dates as an iCalendar (.ics) file, for Google Calendar, Outlook, Thunderbird or Apple's Calendar.
+        ``path`` stands in for the file dialog."""
+        items = insights.due_dates(self.store)
+        if not items:
+            notify(self, 'No due dates', 'None of your logbooks has a due date yet. A Due date column in a logbook gives it some.')
+            return False
+        path = path or self.pick_save('Export due dates', 'ledgerbook-due-dates.ics', 'Calendar files (*.ics)')
+        if not path:
+            return False
+        destination = Path(path)
+        if not destination.suffix:                       # calendars look for .ics
+            destination = destination.with_suffix('.ics')
+            path = str(destination)
+        temporary = destination.with_name(destination.name + '.tmp')
+        try:
+            temporary.write_bytes(insights.calendar(items))
+            temporary.replace(destination)
+        except OSError as e:
+            error(self, e)
+            return False
+        finally:
+            temporary.unlink(missing_ok=True)
+        self.say('Exported %s for your calendar' % plural(len(items), 'due date', 'due dates'), 'good', 'Show', lambda: self._reveal(path))
+        return True
+
     def export_book(self):
         if not self._need_book():
             return
@@ -1159,7 +1186,8 @@ class Main(QMainWindow):
             ('Manage columns', 'columns', self.columns), ('Edit logbook', 'pencil', self.manage_book),
             ('Import logbook', 'upload', self.import_book), ('Import CSV', 'inbox', self.import_csv),
             ('Export logbook', 'download', self.export_book), ('Export CSV', 'table', self.export_csv),
-            ('PDF report', 'file', self.export_pdf), ('Back up database', 'database', self.backup),
+            ('PDF report', 'file', self.export_pdf), ('Export due dates to a calendar', 'download', self.export_calendar),
+            ('Back up database', 'database', self.backup),
             ('Restore backup', 'reset', self.restore_backup), ('Recycle Bin', 'trash', self.recycle_bin),
             ('Archived logbooks', 'archive', self.archived_books), ('Settings', 'sliders', self.settings),
             ('Toggle sidebar', 'sidebar', self.toggle_sidebar), ('Database integrity check', 'shield', self.integrity_check),

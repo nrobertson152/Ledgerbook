@@ -104,6 +104,38 @@ class Improvements(unittest.TestCase):
         self.assertEqual(self.w.current, bid)
         self.assertEqual([self.w.row_ids[r] for r in self.w.selected_rows()], [late])
 
+    def test_due_dates_export_to_a_calendar_file_from_home(self):
+        bid = self.book('Vehicle maintenance')
+        today = date.today()
+        self.w.store.save_entry(bid, {'title': 'Tyres', 'next_due': (today - timedelta(days=3)).isoformat()})
+        self.w.store.save_entry(bid, {'title': 'Oil', 'next_due': (today + timedelta(days=200)).isoformat()})
+        self.w.go_home()
+        asked = []
+        self.w.pick_save = lambda *a: asked.append(a) or str(Path(self.tmp) / 'due dates')   # typed without .ics
+        self.w.welcome.calendar_btn.click()
+        self.assertEqual(asked[0][1:], ('ledgerbook-due-dates.ics', 'Calendar files (*.ics)'))
+        data = (Path(self.tmp) / 'due dates.ics').read_bytes()
+        self.assertEqual(data.count(b'BEGIN:VEVENT'), 2)                     # Oil is far off, but a calendar wants it
+        self.assertEqual(self.notes[-1], 'Exported 2 due dates for your calendar')
+        self.assertEqual(sorted(p.name for p in Path(self.tmp).iterdir() if p.is_file()), ['due dates.ics'])
+
+    def test_calendar_export_with_nothing_due_or_nowhere_to_write(self):
+        told, errors = [], []
+        self.addCleanup(setattr, self.A, 'notify', self.A.notify)
+        self.addCleanup(setattr, self.A, 'error', self.A.error)
+        self.A.notify = lambda *a, **k: told.append(a[1])
+        self.A.error = lambda *a, **k: errors.append(a[1])
+        self.w.pick_save = lambda *a: self.fail('nothing to export, so nothing to ask')
+        self.assertFalse(self.w.export_calendar())
+        self.assertEqual(told, ['No due dates'])
+        bid = self.book('Vehicle maintenance')
+        self.w.store.save_entry(bid, {'title': 'Tyres', 'next_due': date.today().isoformat()})
+        missing = Path(self.tmp) / 'no such folder' / 'due.ics'
+        self.assertFalse(self.w.export_calendar(str(missing)))
+        self.assertEqual(len(errors), 1)
+        self.assertFalse(missing.parent.exists())
+        self.assertEqual(self.notes, [])
+
     def test_entry_dialog_due_buttons_and_attachment_browse(self):
         from PySide6.QtCore import QDate
         from ledgerbook import dialogs as D

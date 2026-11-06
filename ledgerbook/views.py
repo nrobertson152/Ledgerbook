@@ -123,6 +123,9 @@ class WelcomeView(QScrollArea):
         head.addWidget(label(('%d overdue  ·  ' % overdue if overdue else '') +
                              'due in the next %d days' % insights.HORIZON_DAYS, 'faint'))
         head.addStretch(1)
+        self.calendar_btn = button('Export to calendar…', 'ghost', 'download', self.win.export_calendar,
+                                   'Save every due date as a calendar file for Google Calendar, Outlook, Thunderbird or Apple Calendar')
+        head.addWidget(self.calendar_btn)
         card.body.addLayout(head)
         t = theme.current()
         self.upcoming_rows = []
