@@ -3,7 +3,7 @@ import csv
 import json
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from ledgerbook import insights as I
@@ -86,6 +86,97 @@ class DueDates(unittest.TestCase):
             self.assertEqual(I.upcoming(s, TODAY, horizon=-100), [])
             s.close()
 
+
+
+def unfold(data):
+    """The content lines of an iCalendar file, unfolded (RFC 5545 3.1)."""
+    text = data.decode('utf-8')
+    return text.replace('\r\n ', '').split('\r\n')
+
+
+class Calendar(unittest.TestCase):
+    STAMP = datetime(2026, 11, 5, 12, 30, tzinfo=timezone.utc)
+
+    def store(self, d):
+        s = Store(Path(d) / 'db.sqlite3')
+        car = s.add_book('Truck, blue', fields=templates.fields('Vehicle maintenance'))
+        s.save_entry(car, {'entry_date': '2026-05-01', 'title': 'Oil change', 'next_due': '2026-08-01'})
+        s.save_entry(car, {'entry_date': '2026-08-03', 'title': 'Oil change', 'next_due': '2026-11-10'})
+        s.save_entry(car, {'entry_date': '2026-01-10', 'title': 'Tyre rotation', 'next_due': '2026-10-01'})
+        s.save_entry(car, {'entry_date': '2026-02-10', 'title': 'Brakes; front', 'next_due': '2027-06-01'})
+        s.save_entry(car, {'entry_date': '2026-03-10', 'title': 'Wipers', 'next_due': ''})
+        old = s.add_book('Old car', fields=templates.fields('Vehicle maintenance'))
+        s.save_entry(old, {'title': 'Oil change', 'next_due': '2026-11-01'})
+        s.configure_book(old, archived=1)
+        return s
+
+    def test_text_is_escaped(self):
+        self.assertEqual(I._ics_text('a,b;c\\d\ne\r\nf'), 'a\\,b\\;c\\\\d\\ne\\nf')
+
+    def test_long_lines_fold_at_75_octets_and_never_inside_a_character(self):
+        line = 'SUMMARY:' + 'é' * 60 + 'x' * 100
+        folded = I._ics_line(line)
+        parts = folded.split('\r\n')
+        self.assertGreater(len(parts), 2)
+        for i, part in enumerate(parts):
+            self.assertLessEqual(len(part.encode('utf-8')), 75)
+            self.assertEqual(part.startswith(' '), i > 0)
+        self.assertEqual(folded.replace('\r\n ', ''), line)
+        self.assertEqual(I._ics_line('SHORT:ok'), 'SHORT:ok')
+
+    def test_every_current_due_date_is_an_all_day_event_with_a_reminder(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = self.store(d)
+            items = I.due_dates(s, TODAY)
+            # Brakes is seven months away: the Home screen leaves it out, a calendar doesn't.
+            self.assertEqual([(i['item'], i['due']) for i in items],
+                             [('Tyre rotation', '2026-10-01'), ('Oil change', '2026-11-10'), ('Brakes; front', '2027-06-01')])
+            data = I.calendar(items, self.STAMP)
+            s.close()
+        self.assertTrue(data.startswith(b'BEGIN:VCALENDAR\r\nVERSION:2.0\r\n'))
+        self.assertTrue(data.endswith(b'END:VCALENDAR\r\n'))
+        self.assertNotIn(b'\n', data.replace(b'\r\n', b''))           # every line ends CRLF
+        lines = unfold(data)
+        self.assertEqual(lines.count('BEGIN:VEVENT'), 3)
+        self.assertEqual(lines.count('BEGIN:VALARM'), 3)
+        self.assertIn('DTSTART;VALUE=DATE:20270601', lines)
+        self.assertIn('DTEND;VALUE=DATE:20270602', lines)
+        self.assertIn('SUMMARY:Brakes\\; front due · Truck\\, blue', lines)
+        self.assertIn('TRIGGER:-P1D', lines)
+        self.assertEqual(lines.count('DTSTAMP:20261105T123000Z'), 3)
+        uids = [x for x in lines if x.startswith('UID:')]
+        self.assertEqual(len(set(uids)), 3)
+
+    def test_the_same_due_date_keeps_its_identity_in_every_export(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = self.store(d)
+            first = [x for x in unfold(I.calendar(I.due_dates(s, TODAY), self.STAMP)) if x.startswith('UID:')]
+            later = datetime(2027, 1, 2, tzinfo=timezone.utc)
+            again = [x for x in unfold(I.calendar(I.due_dates(s, date(2027, 1, 2)), later)) if x.startswith('UID:')]
+            s.close()
+        self.assertEqual(first, again)
+
+    def test_a_due_value_that_is_not_a_date_is_left_out(self):
+        data = I.calendar([{'book_id': 1, 'entry_id': 2, 'key': 'next_due', 'item': 'x', 'book': 'b', 'due': 'soon'}],
+                          self.STAMP)
+        self.assertNotIn(b'VEVENT', data)
+
+    def test_another_calendar_reader_agrees(self):
+        try:
+            import icalendar
+        except ImportError:
+            self.skipTest('icalendar is not installed (CI installs it)')
+        with tempfile.TemporaryDirectory() as d:
+            s = self.store(d)
+            data = I.calendar(I.due_dates(s, TODAY), self.STAMP)
+            s.close()
+        cal = icalendar.Calendar.from_ical(data)
+        events = [c for c in cal.walk('VEVENT')]
+        self.assertEqual([(str(e['SUMMARY']), e['DTSTART'].dt, e['DTEND'].dt) for e in events],
+                         [('Tyre rotation due · Truck, blue', date(2026, 10, 1), date(2026, 10, 2)),
+                          ('Oil change due · Truck, blue', date(2026, 11, 10), date(2026, 11, 11)),
+                          ('Brakes; front due · Truck, blue', date(2027, 6, 1), date(2027, 6, 2))])
+        self.assertEqual([str(a['TRIGGER'].dt) for e in events for a in e.walk('VALARM')], ['-1 day, 0:00:00'] * 3)
 
 class Templates(unittest.TestCase):
     def test_every_template_is_a_valid_logbook(self):
